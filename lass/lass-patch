@@ -1,0 +1,278 @@
+commit 815ba9b43ccec19df50f585bf5ad6390bc8a0906
+Author: Yian Chen <yian.chen@intel.com>
+Date:   Fri Jan 10 07:11:06 2020 -0800
+
+    x86/cpu: Set LASS as pinning sensitive CR4 bit
+    
+    Under existing design, SMEP, SMAP and UMIP are pinning sensitive.
+    Similarly, LASS come with an effort for security concerns,
+    therefore, add it into the set of pinning sensitive bits
+    
+    Signed-off-by: Yian Chen <yian.chen@intel.com>
+
+diff --git a/arch/x86/kernel/cpu/common.c b/arch/x86/kernel/cpu/common.c
+index 1e1b4d8fe3be..ff7db9bcb745 100644
+--- a/arch/x86/kernel/cpu/common.c
++++ b/arch/x86/kernel/cpu/common.c
+@@ -370,7 +370,8 @@ static __always_inline void setup_umip(struct cpuinfo_x86 *c)
+ 
+ /* These bits should not change their value after CPU init is finished. */
+ static const unsigned long cr4_pinned_mask =
+-	X86_CR4_SMEP | X86_CR4_SMAP | X86_CR4_UMIP | X86_CR4_FSGSBASE;
++	X86_CR4_SMEP | X86_CR4_SMAP | X86_CR4_UMIP | X86_CR4_FSGSBASE |
++	X86_CR4_LASS;
+ static DEFINE_STATIC_KEY_FALSE_RO(cr_pinning);
+ static unsigned long cr4_pinned_bits __ro_after_init;
+ 
+commit 8fb5bf741f1f30aa40ad8e39292464e73ee75a80
+Author: Yian Chen <yian.chen@intel.com>
+Date:   Fri Jan 10 07:07:33 2020 -0800
+
+    x86/cpu: Toggle AC bit while accessing variable poking_addr
+    
+    LASS (Linear Address space separation) stops access to a positive
+    address from Kernel. LASS can be deactivated in kernel if AC bit
+    in EFLAGS register is set. The variable poking_addr holds a
+    positive address, hence, toggling the AC bit in EFLAGS register
+    allows the access to this address.
+    
+    Signed-off-by: Yian Chen <yian.chen@intel.com>
+
+diff --git a/arch/x86/kernel/alternative.c b/arch/x86/kernel/alternative.c
+index 23fb4d51a5da..e1bf01237882 100644
+--- a/arch/x86/kernel/alternative.c
++++ b/arch/x86/kernel/alternative.c
+@@ -1021,7 +1021,11 @@ static void *__text_poke(void *addr, const void *opcode, size_t len)
+ 	prev = use_temporary_mm(poking_mm);
+ 
+ 	kasan_disable_current();
++
++	stac();
+ 	memcpy((u8 *)poking_addr + offset_in_page(addr), opcode, len);
++	clac();
++
+ 	kasan_enable_current();
+ 
+ 	/*
+commit 96cf67541d6137ebe43fb905fa0faae5a0c06d7d
+Author: Yian Chen <yian.chen@intel.com>
+Date:   Tue Feb 18 12:28:11 2020 -0800
+
+    x86/cpu: Enable LASS (Linear Address Space Separation)
+    
+    When CPU features include LASS, kernel sets
+    X86_FEATURE_LASS bit and enables LASS automatically
+    at starting time. Therefore, there is no reason to
+    map vsyscall page in this case because the legacy
+    vsyscall functions are located in address range
+    0xffffffffff600000-0xffffffffff601000 (negative
+    linear addresses) and calling these functions
+    triggers a #GP(0) fault.
+    
+    LASS can be disabled at starting time by argument
+    "clearcpuid=390".
+    
+    Signed-off-by: Yian Chen <yian.chen@intel.com>
+
+diff --git a/arch/x86/entry/vsyscall/vsyscall_64.c b/arch/x86/entry/vsyscall/vsyscall_64.c
+index 0b6b277ee050..c5c3319fe3d7 100644
+--- a/arch/x86/entry/vsyscall/vsyscall_64.c
++++ b/arch/x86/entry/vsyscall/vsyscall_64.c
+@@ -379,6 +379,14 @@ void __init map_vsyscall(void)
+ 	extern char __vsyscall_page;
+ 	unsigned long physaddr_vsyscall = __pa_symbol(&__vsyscall_page);
+ 
++	/*
++	 * When LASS is on, vsyscall triggers a #GP(0) fault,
++	 * so that force vsyscall_mode to NONE.
++	 */
++	if (cpu_has(&boot_cpu_data, X86_FEATURE_LASS)) {
++		vsyscall_mode = NONE;
++		return;
++	}
+ 	/*
+ 	 * For full emulation, the page needs to exist for real.  In
+ 	 * execute-only mode, there is no PTE at all backing the vsyscall
+diff --git a/arch/x86/kernel/cpu/common.c b/arch/x86/kernel/cpu/common.c
+index 0083464de5e3..1e1b4d8fe3be 100644
+--- a/arch/x86/kernel/cpu/common.c
++++ b/arch/x86/kernel/cpu/common.c
+@@ -59,6 +59,7 @@
+ #include <asm/cpu_device_id.h>
+ #include <asm/uv/uv.h>
+ #include <asm/sigframe.h>
++#include <asm/vsyscall.h>
+ 
+ #include "cpu.h"
+ 
+@@ -335,6 +336,14 @@ static __always_inline void setup_smap(struct cpuinfo_x86 *c)
+ 	}
+ }
+ 
++static __always_inline void setup_lass(struct cpuinfo_x86 *c)
++{
++	if (cpu_has(c, X86_FEATURE_LASS))
++		cr4_set_bits(X86_CR4_LASS);
++	else
++		cr4_clear_bits(X86_CR4_LASS);
++}
++
+ static __always_inline void setup_umip(struct cpuinfo_x86 *c)
+ {
+ 	/* Check the boot processor, plus build option for UMIP. */
+@@ -1599,6 +1608,7 @@ static void identify_cpu(struct cpuinfo_x86 *c)
+ 	setup_smep(c);
+ 	setup_smap(c);
+ 	setup_umip(c);
++	setup_lass(c);
+ 
+ 	/* Enable FSGSBASE instructions if available. */
+ 	if (cpu_has(c, X86_FEATURE_FSGSBASE)) {
+commit 8fb5bf741f1f30aa40ad8e39292464e73ee75a80
+Author: Yian Chen <yian.chen@intel.com>
+Date:   Fri Jan 10 07:07:33 2020 -0800
+
+    x86/cpu: Toggle AC bit while accessing variable poking_addr
+    
+    LASS (Linear Address space separation) stops access to a positive
+    address from Kernel. LASS can be deactivated in kernel if AC bit
+    in EFLAGS register is set. The variable poking_addr holds a
+    positive address, hence, toggling the AC bit in EFLAGS register
+    allows the access to this address.
+    
+    Signed-off-by: Yian Chen <yian.chen@intel.com>
+
+diff --git a/arch/x86/kernel/alternative.c b/arch/x86/kernel/alternative.c
+index 23fb4d51a5da..e1bf01237882 100644
+--- a/arch/x86/kernel/alternative.c
++++ b/arch/x86/kernel/alternative.c
+@@ -1021,7 +1021,11 @@ static void *__text_poke(void *addr, const void *opcode, size_t len)
+ 	prev = use_temporary_mm(poking_mm);
+ 
+ 	kasan_disable_current();
++
++	stac();
+ 	memcpy((u8 *)poking_addr + offset_in_page(addr), opcode, len);
++	clac();
++
+ 	kasan_enable_current();
+ 
+ 	/*
+commit ae1677a1441e84225cce83449c0189d6a5bdfda1
+Author: Yian Chen <yian.chen@intel.com>
+Date:   Wed Dec 11 08:00:38 2019 -0800
+
+    x86/cpu: Add definitions for LASS (Linear Address Space Separation)
+    
+    LASS is an ISA extension to protect OS from side channel attacks
+    through page walks in user/kernel mode.
+    
+    LASS partitions Linux linear address space into two
+    halves, positive address (LA[63]=0) and negative address
+    (LA[63]=1). LASS stops any data access or code execution
+    into:
+        1. positive address while in kernel space
+        2, negative address while in user space
+    and generates #GP(0) fault for a violation.
+    
+    LASS capacity is identified by a CPUID and enabled by a bit in
+    CR4 register.
+    
+    Enumerate the CPUID and CR4 bits for LASS for
+    programming purpose.
+    
+    Signed-off-by: Yian Chen <yian.chen@intel.com>
+
+diff --git a/arch/x86/include/asm/cpufeatures.h b/arch/x86/include/asm/cpufeatures.h
+index d5b5f2ab87a0..5bc98a6d3000 100644
+--- a/arch/x86/include/asm/cpufeatures.h
++++ b/arch/x86/include/asm/cpufeatures.h
+@@ -299,6 +299,7 @@
+ /* Intel-defined CPU features, CPUID level 0x00000007:1 (EAX), word 12 */
+ #define X86_FEATURE_AVX_VNNI		(12*32+ 4) /* AVX VNNI instructions */
+ #define X86_FEATURE_AVX512_BF16		(12*32+ 5) /* AVX512 BFLOAT16 instructions */
++#define X86_FEATURE_LASS                (12*32+ 6) /* Linear address space separation */
+ #define X86_FEATURE_AMX_TILE		(18*32+24) /* AMX tile Support */
+ 
+ /* AMD-defined CPU features, CPUID level 0x80000008 (EBX), word 13 */
+diff --git a/arch/x86/include/uapi/asm/processor-flags.h b/arch/x86/include/uapi/asm/processor-flags.h
+index bcba3c643e63..6e91f91069ca 100644
+--- a/arch/x86/include/uapi/asm/processor-flags.h
++++ b/arch/x86/include/uapi/asm/processor-flags.h
+@@ -130,6 +130,8 @@
+ #define X86_CR4_SMAP		_BITUL(X86_CR4_SMAP_BIT)
+ #define X86_CR4_PKE_BIT		22 /* enable Protection Keys support */
+ #define X86_CR4_PKE		_BITUL(X86_CR4_PKE_BIT)
++#define X86_CR4_LASS_BIT	27 /* enable LASS support */
++#define X86_CR4_LASS		_BITUL(X86_CR4_LASS_BIT)
+ 
+ /*
+  * x86-64 Task Priority Register, CR8
+diff --git a/tools/arch/x86/include/asm/cpufeatures.h b/tools/arch/x86/include/asm/cpufeatures.h
+index d0ce5cfd3ac1..416056d87d27 100644
+--- a/tools/arch/x86/include/asm/cpufeatures.h
++++ b/tools/arch/x86/include/asm/cpufeatures.h
+@@ -298,6 +298,7 @@
+ /* Intel-defined CPU features, CPUID level 0x00000007:1 (EAX), word 12 */
+ #define X86_FEATURE_AVX_VNNI		(12*32+ 4) /* AVX VNNI instructions */
+ #define X86_FEATURE_AVX512_BF16		(12*32+ 5) /* AVX512 BFLOAT16 instructions */
++#define X86_FEATURE_LASS		(12*32+ 6) /* Linear address space separation */
+ 
+ /* AMD-defined CPU features, CPUID level 0x80000008 (EBX), word 13 */
+ #define X86_FEATURE_CLZERO		(13*32+ 0) /* CLZERO instruction */
+commit 48b20d2ff6c3d15927a3f31cce6ed1bac3ee8a34
+Author: Yian Chen <yian.chen@intel.com>
+Date:   Tue Nov 16 16:03:38 2021 -0800
+
+    x86/cpu: Disable LASS when user enables legacy vsyscall
+    
+    When CPU features include LASS (Linear Address Space
+    Separation), kernel sets X86_FEATURE_LASS bit and
+    enables LASS automatically at starting time, therefore,
+    access to kernel addresses or negative
+    addresses from user space triggers a GP(0) fault.
+    
+    Legacy vsyscall functions are located in address
+    range 0xffffffffff600000-0xffffffffff601000 (negative
+    linear addresses). When user explicitly enables
+    vsyscall, LASS has to be disabled so that
+    vsyscalls can subsequently be emulated via page
+    fault as same as legacy x86 platforms. However, this
+    exposes security vulnerability.
+    
+    Signed-off-by: Yian Chen <yian.chen@intel.com>
+
+diff --git a/arch/x86/entry/vsyscall/vsyscall_64.c b/arch/x86/entry/vsyscall/vsyscall_64.c
+index c5c3319fe3d7..a70d34f76779 100644
+--- a/arch/x86/entry/vsyscall/vsyscall_64.c
++++ b/arch/x86/entry/vsyscall/vsyscall_64.c
+@@ -54,15 +54,24 @@ static enum { EMULATE, XONLY, NONE } vsyscall_mode __ro_after_init =
+ static int __init vsyscall_setup(char *str)
+ {
+ 	if (str) {
+-		if (!strcmp("emulate", str))
++		if (strcmp("none", str) &&
++		    cpu_has(&boot_cpu_data, X86_FEATURE_LASS)) {
++			setup_clear_cpu_cap(X86_FEATURE_LASS);
++			pr_info("LASS disabled because user is to enable vsyscall. This exposes security vulnerability!");
++		}
++
++		if (!strcmp("emulate", str)) {
+ 			vsyscall_mode = EMULATE;
+-		else if (!strcmp("xonly", str))
++			pr_info("User set \"vsyscall=emulate\", vsyscall emulated.");
++
++		} else if (!strcmp("xonly", str)) {
+ 			vsyscall_mode = XONLY;
+-		else if (!strcmp("none", str))
++			pr_info("User set \"vsyscall=xonly\", vsyscall executable.");
++		} else if (!strcmp("none", str)) {
+ 			vsyscall_mode = NONE;
+-		else
++		} else {
+ 			return -EINVAL;
+-
++		}
+ 		return 0;
+ 	}
+ 
