@@ -1,4 +1,4 @@
-Version 1.5.4
-Second beta release
+Version 1.7.5
+Third beta release
 Known Issues: N/A
-Changes: SAF changed to IFS (in field scan) everywhere
+Changes: Modifications to support upstreamed driver.

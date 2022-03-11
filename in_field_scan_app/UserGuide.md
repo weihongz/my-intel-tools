@@ -18,20 +18,21 @@ Extract the file containing IFS CLI to a directory on the target system.
 Known Limitations of `IFS CLI`
 ==============================
 Scan repeat intervals are between 30 and 525600 minutes.
+Multi-blob support not yet available. For BLOB reload use -r0.
 
 Operation
 =========
-On start, all default parameters are written to the sysfs files,
+On start, all default parameters are written to the target files,
 then command line parameters are evaluated and parameter files
 are updated. Next, the appropriate cpus are signaled to begin
-scanning and each result file is polled until the result is
-not busy (not equal to -1). If any scan failures are detected
+scanning and each status file is polled until the status is
+not busy (EBUSY on popen). If any scan failures are detected
 a message is sent to the console (or stderr) showing which cpus
 and which sockets had failing indications. The application either
 exits if cycle wait is equal to 0 or stop is requested, otherwise
-poll every 1 second looking for a stop command. At the next cycle
-interval a new scan is initiated and the results files are again
-read and processed.
+poll looking for a stop command. At the next cycle interval a
+new scan is initiated and the status files are again read and
+processed.
 
 Executing 'IFS CLI'
 ===================
@@ -40,8 +41,7 @@ Executing 'IFS CLI'
 Arguments
 =========
 -h  :   display usage parameters
--r  :   reload scan blob into each cpu scan processor's memory
--q  :   verbose/quiet mode (0/1 - default = 1)
+-r  :   reload scan blob (0-n), where n is number of blobs -1
 -s  :   stop all scans and exit app (0/1 - default = 0)
 -t  :   thread wait (1-500) - in milliseconds (default = 1)
 -d  :   core delay (1-1000) - in milliseconds (default = 1)
@@ -51,18 +51,20 @@ Arguments
 -f  :   additional items on failure results (0 to 3)
         1 = add clock time, 2 = add iterations, 3 = add both
 -i  :   noint (1:no interrupts during scan, 0:interrupts ok)
--a  :   start chunk (default = 0)
--z  :   stop chunk (blob dependent - default read from sysfs)
 -D  :   display iteration time and count
 -I  :   inject random error on random core on each iteration
 -E  :   display chunk, core, and error/warning code information
 -W  :   display excessive time to complete warning
+-R  :   number of test retries
+-P  :   display passing indication on stdout
+-X  :   exit application on error
+-F  :   fail on any offline cpu
 
 Note:
 The cycle wait timer is used to automatically repeat the scan(s)
 - 0     means do only 1 scan (no repeats)
 - 1440  means repeat the scan(s) at 24 hours intervals
-- Min interval=30 minutes, Max interval=525600 minutes (1 year)
+- Min interval = 30 minutes, Max interval = 525600 minutes (1 year)
 
 Return codes
 ============
@@ -74,27 +76,22 @@ Return codes
 
 Execution Example
 =================
-> ./in_field_scan_app -q0 -s0 -t1 -d1 -w1 -i0 -f3 -D -E -W 
+> ./in_field_scan_app -r0 -s0 -w1 -i1 -R5 -f3 -D -E -W
 
 STDOUT SCREEN SHOT BELOW
 ------------------------
 
-In Field Scan (IFS) Application - Version: 1.5.4
+In-Field Scan (IFS) Application - Version: 1.7.0
 Intel Corporation - Copyright (c) 2022
 
-Command Line      = -q0 -s0 -t1 -d1 -w1 -i0 -f3 -D -E -W 
+Command Line      = -r0 -s0 -w1 -i1 -R5 -f3 -D -E -W 
 Scan Blob Version = 0xF0000000
-Microcode Version = 0x9137D291
+Microcode Version = 0x8D0003B0
 
 WARNING - Scan repeat interval limited to the minimum of 30 minutes.
 
-Thu Sep 16 21:05:24 2021 - Executing In Field Scan - Iteration #: 1
-                           FAILURE: Chunk    0 on CPU #  21, Failure code = 0x02: Scan signature did not match the expected value
-                           FAILURE: Chunk    0 on CPU #  61, Failure code = 0x02: Scan signature did not match the expected value
-Thu Sep 16 21:05:24 2021 - (iteration # 00001, cycle time = minute 0000000)
-                           Failing logical cpu(s)     = 21,61
-                           Failing physical core(s)   = 1:1
-                           Failing physical socket(s) = 1:NO PPIN
+Wed Mar  2 19:23:28 2022 - Executing In-Field Scan - Iteration #: 1
+                           WARNING: Chunk   0 on CPU #  61, Warning code = 0x01: Other thread could not join
 
 Author
 ======
